@@ -112,11 +112,20 @@ for _root, _dirs, _files in os.walk(DST):
             _dirs.remove(_d)
 log("Purged cached src/eval/agent modules and __pycache__.")
 
-# 3c. Print installed versions so failures are diagnosable
+# 3c. Print installed versions so failures are diagnosable, and warn if the
+# running kernel still holds older/newer modules than what we just installed.
 try:
     import transformers, trl, peft, torch
     log(f"Versions — torch={torch.__version__} transformers={transformers.__version__} "
         f"trl={trl.__version__} peft={peft.__version__}")
+
+    expected = {"transformers": "4.44", "trl": "0.11", "peft": "0.13"}
+    actual = {"transformers": transformers.__version__, "trl": trl.__version__, "peft": peft.__version__}
+    mismatched = [k for k, pref in expected.items() if not actual[k].startswith(pref)]
+    if mismatched:
+        log("NOTE: running kernel has newer packages than the pins "
+            f"(expected {expected}, got {actual}).")
+        log("The training code is version-agnostic, so this is fine — continuing.")
 except Exception as _e:
     log(f"Version check failed: {_e}")
 

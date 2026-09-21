@@ -212,6 +212,42 @@ def _build_dpo_trainer(model, ref_model, args, tokenizer, train_ds, eval_ds):
     )
 
 
+def _enable_input_require_grads(model):
+    """Make the input embeddings require grad so PEFT + gradient checkpointing works.
+
+    Without this, the backward pass fails with
+    "element 0 of tensors does not require grad and does not have a grad_fn"
+    because the frozen base model leaves the graph disconnected.
+    """
+    # Preferred: the built-in helper (works on PeftModel and PreTrainedModel).
+    for obj in (model, getattr(model, "base_model", None),
+                getattr(getattr(model, "base_model", None), "model", None)):
+        if obj is not None and hasattr(obj, "enable_input_require_grads"):
+            try:
+                obj.enable_input_require_grads()
+                print("  Enabled input require_grads (built-in).")
+                return
+            except Exception as e:
+                print(f"  [WARN] enable_input_require_grads failed: {e}")
+
+    # Fallback: manually hook the input embeddings.
+    try:
+        base = model
+        for attr in ("base_model", "model"):
+            if hasattr(base, attr):
+                base = getattr(base, attr)
+        embeddings = base.get_input_embeddings()
+
+        def _hook(module, inputs, output):
+            if isinstance(output, torch.Tensor):
+                output.requires_grad_(True)
+
+        embeddings.register_forward_hook(_hook)
+        print("  Enabled input require_grads (manual hook).")
+    except Exception as e:
+        print(f"  [WARN] Could not enable input require_grads: {e}")
+
+
 def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules: Optional[list] = None):
     """Apply LoRA to a model."""
     _disable_torchao_dispatch()
@@ -227,7 +263,28 @@ def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules:
         bias="none",
         task_type="CAUSAL_LM",
     )
-    return get_peft_model(model, lora_config)
+    model = get_peft_model(model, lora_config)
+
+    # With gradient checkpointing, the frozen base model means the inputs never
+    # require grad, which breaks the backward pass with:
+    #   "element 0 of tensors does not require grad and does not have a grad_fn"
+    _enable_input_require_grads(model)
+
+    # Gradient checkpointing is incompatible with the KV cache.
+    if hasattr(model, "config"):
+        model.config.use_cache = False
+
+    model.train()
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if trainable == 0:
+        raise RuntimeError(
+            "LoRA produced 0 trainable parameters — target_modules "
+            f"{target_modules} did not match the model. Check module names."
+        )
+    print(f"  LoRA trainable params: {trainable:,}")
+
+    return model
 
 
 def prepare_dataset(data_paths: dict, tokenizer: AutoTokenizer, max_length: int = 8192) -> Dataset:
