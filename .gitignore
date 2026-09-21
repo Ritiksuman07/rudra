@@ -7,6 +7,8 @@ dist/
 build/
 data/cache/
 data/test_output/
+data/*.jsonl
+data/**/*.jsonl
 output/
 deploy/
 *.gguf
@@ -17,3 +19,4 @@ wandb/
 runs/
 .DS_Store
 notebooks/.ipynb_checkpoints
+eval_results/
