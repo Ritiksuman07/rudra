@@ -77,6 +77,8 @@ if "_enable_input_require_grads" not in train_src:
     problems.append("missing _enable_input_require_grads (grad checkpointing fix)")
 if "_training_device_kwargs" not in train_src:
     problems.append("missing _training_device_kwargs (device-aware precision)")
+if "_patch_peft_optional_deps" not in train_src:
+    problems.append("missing _patch_peft_optional_deps (bnb/torchao guard)")
 if train_src.count('evaluation_strategy="steps"') > 0:
     problems.append('literal evaluation_strategy="steps" (should use the helper)')
 if problems:
@@ -91,7 +93,7 @@ log("Installing dependencies...")
 subprocess.run(
     ["pip", "install", "-q",
      "transformers==4.44.2", "trl==0.11.4", "peft==0.13.2",
-     "accelerate==0.34.2", "bitsandbytes==0.44.1", "datasets==3.0.1",
+     "accelerate==0.34.2", "datasets==3.0.1",
      "sentencepiece", "pyyaml", "evalplus"],
     check=True,
 )
@@ -100,6 +102,12 @@ subprocess.run(
 # ImportError instead of skipping. We don't use torchao, so remove it.
 log("Removing incompatible torchao...")
 subprocess.run(["pip", "uninstall", "-y", "torchao"], check=False)
+
+# bitsandbytes in the Kaggle image can be built against an incompatible triton
+# ("No module named 'triton.ops'"), which crashes PEFT's LoRA dispatcher even
+# though we do plain fp16/bf16 LoRA (no quantization). Remove it too.
+log("Removing incompatible bitsandbytes...")
+subprocess.run(["pip", "uninstall", "-y", "bitsandbytes"], check=False)
 
 # 3b. Purge any previously-imported project modules and bytecode caches.
 # Re-running this cell in the same kernel keeps `src.*` in sys.modules, which

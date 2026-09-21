@@ -154,39 +154,49 @@ def setup_model(model_name: str, tokenizer: AutoTokenizer, quantize: bool = Fals
     return model
 
 
-def _disable_torchao_dispatch():
-    """Make PEFT tolerate an incompatible torchao install.
+def _patch_peft_optional_deps():
+    """Make PEFT's LoRA dispatcher tolerate broken/incompatible optional backends.
 
-    Recent PEFT versions call peft.import_utils.is_torchao_available() from the
-    LoRA dispatcher. When torchao is present but too old, that function raises
-    ImportError instead of returning False, which crashes get_peft_model() even
-    though we never use torchao. Patch it to return False on any error.
+    PEFT imports optional quantization backends (torchao, bitsandbytes) when
+    their availability check passes. If the installed package is present but
+    broken — e.g. a torchao version below 0.16, or a bitsandbytes built against
+    a different triton (`No module named 'triton.ops'`) — the import raises and
+    `get_peft_model()` crashes even though we never use that backend.
+
+    Replace the availability checks with a real import attempt so a broken
+    package is treated as unavailable instead of fatal.
     """
-    def _make_safe(orig):
+    def _make_safe(pkg_name):
         def _safe():
             try:
-                return orig()
+                __import__(pkg_name)
+                return True
             except Exception:
                 return False
         return _safe
 
-    try:
-        import peft.import_utils as _iu
-        if not getattr(_iu.is_torchao_available, "_rudra_safe", False):
-            _safe = _make_safe(_iu.is_torchao_available)
-            _safe._rudra_safe = True
-            _iu.is_torchao_available = _safe
-    except Exception:
-        pass
+    targets = [
+        ("peft.import_utils", "is_torchao_available", "torchao"),
+        ("peft.import_utils", "is_bnb_available", "bitsandbytes"),
+        ("peft.tuners.lora.torchao", "is_torchao_available", "torchao"),
+        ("peft.tuners.lora.model", "is_bnb_available", "bitsandbytes"),
+    ]
+    import importlib
+    for mod_name, attr, pkg in targets:
+        try:
+            mod = importlib.import_module(mod_name)
+            current = getattr(mod, attr, None)
+            if current is not None and not getattr(current, "_rudra_safe", False):
+                safe = _make_safe(pkg)
+                safe._rudra_safe = True
+                setattr(mod, attr, safe)
+        except Exception:
+            pass
 
-    try:
-        import peft.tuners.lora.torchao as _t
-        if not getattr(_t.is_torchao_available, "_rudra_safe", False):
-            _safe = _make_safe(_t.is_torchao_available)
-            _safe._rudra_safe = True
-            _t.is_torchao_available = _safe
-    except Exception:
-        pass
+
+# Backwards-compatible alias
+def _disable_torchao_dispatch():
+    _patch_peft_optional_deps()
 
 
 def _eval_strategy_kwarg(value: str = "steps") -> dict:
@@ -310,7 +320,7 @@ def _enable_input_require_grads(model):
 
 def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules: Optional[list] = None):
     """Apply LoRA to a model."""
-    _disable_torchao_dispatch()
+    _patch_peft_optional_deps()
 
     if target_modules is None:
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]

@@ -10,7 +10,11 @@ trl==0.11.4
 peft==0.13.2
 accelerate==0.34.2
 datasets==3.0.1
-bitsandbytes==0.44.1
+# bitsandbytes is only needed for QLoRA (4-bit). Plain fp16/bf16 LoRA (what this
+# pipeline uses) does not need it, and a broken bitsandbytes can crash PEFT's
+# LoRA dispatcher (e.g. "No module named 'triton.ops'"). Uncomment only if you
+# enable quantization.
+# bitsandbytes==0.44.1
 # NOTE: if torchao is installed, PEFT's LoRA dispatcher raises ImportError when
 # the version is below 0.16.0. We don't use torchao — run `pip uninstall -y torchao`
 # or rely on the _disable_torchao_dispatch() shim in src/train.py.
