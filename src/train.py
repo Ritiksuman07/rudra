@@ -148,6 +148,70 @@ def _eval_strategy_kwarg(value: str = "steps") -> dict:
     return {"evaluation_strategy": value}
 
 
+def _build_training_args(base_kwargs: dict, eval_strategy: str = "steps", config_cls=None):
+    """Construct TrainingArguments/DPOConfig across transformers versions.
+
+    Tries the new kwarg name first, then the old one. Falls back gracefully if
+    signature inspection failed for any reason.
+    """
+    if config_cls is None:
+        config_cls = TrainingArguments
+    preferred = _eval_strategy_kwarg(eval_strategy)
+    fallback = {"evaluation_strategy": eval_strategy} if "eval_strategy" in preferred else {"eval_strategy": eval_strategy}
+
+    try:
+        return config_cls(**base_kwargs, **preferred)
+    except TypeError:
+        return config_cls(**base_kwargs, **fallback)
+
+
+def _call_with_fallbacks(fn, base_kwargs: dict, option_sets: list):
+    """Call fn with base_kwargs plus the first option set that doesn't raise TypeError."""
+    last_err = None
+    for opts in option_sets:
+        try:
+            return fn(**base_kwargs, **opts)
+        except TypeError as e:
+            last_err = e
+            continue
+    if last_err is not None:
+        raise last_err
+    return fn(**base_kwargs)
+
+
+def _build_sft_trainer(model, args, tokenizer, train_ds, eval_ds, max_seq_length: int, text_field: str = "text"):
+    """Construct SFTTrainer across TRL versions (tokenizer vs processing_class,
+    max_seq_length/dataset_text_field location)."""
+    base = {"model": model, "args": args, "train_dataset": train_ds, "eval_dataset": eval_ds}
+    return _call_with_fallbacks(
+        SFTTrainer,
+        base,
+        [
+            {"tokenizer": tokenizer, "max_seq_length": max_seq_length, "dataset_text_field": text_field},
+            {"processing_class": tokenizer, "max_seq_length": max_seq_length, "dataset_text_field": text_field},
+            {"processing_class": tokenizer, "dataset_text_field": text_field},
+            {"processing_class": tokenizer},
+            {"tokenizer": tokenizer},
+        ],
+    )
+
+
+def _build_dpo_trainer(model, ref_model, args, tokenizer, train_ds, eval_ds):
+    """Construct DPOTrainer across TRL versions (tokenizer vs processing_class)."""
+    base = {
+        "model": model,
+        "ref_model": ref_model,
+        "args": args,
+        "train_dataset": train_ds,
+        "eval_dataset": eval_ds,
+    }
+    return _call_with_fallbacks(
+        DPOTrainer,
+        base,
+        [{"tokenizer": tokenizer}, {"processing_class": tokenizer}],
+    )
+
+
 def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules: Optional[list] = None):
     """Apply LoRA to a model."""
     _disable_torchao_dispatch()
@@ -261,37 +325,34 @@ def stage_1_sft(config: dict, tokenizer: AutoTokenizer):
 
     split = dataset.train_test_split(test_size=0.05, seed=config.seed)
 
-    training_args = TrainingArguments(
-        output_dir=os.path.join(config.output_dir, "stage1"),
-        per_device_train_batch_size=cfg["batch_size"],
-        gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
-        learning_rate=cfg["learning_rate"],
-        num_train_epochs=cfg["num_epochs"],
-        warmup_steps=cfg["warmup_steps"],
-        weight_decay=cfg["weight_decay"],
-        logging_steps=10,
-        save_steps=500,
-        eval_steps=500,
-        **_eval_strategy_kwarg("steps"),
-        save_strategy="steps",
-        bf16=True,
-        gradient_checkpointing=True,
-        optim=cfg["optimizer"],
-        lr_scheduler_type=cfg["scheduler"],
-        seed=config.seed,
-        report_to="none",
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
+    training_args = _build_training_args(
+        {
+            "output_dir": os.path.join(config.output_dir, "stage1"),
+            "per_device_train_batch_size": cfg["batch_size"],
+            "gradient_accumulation_steps": cfg["gradient_accumulation_steps"],
+            "learning_rate": cfg["learning_rate"],
+            "num_train_epochs": cfg["num_epochs"],
+            "warmup_steps": cfg["warmup_steps"],
+            "weight_decay": cfg["weight_decay"],
+            "logging_steps": 10,
+            "save_steps": 500,
+            "eval_steps": 500,
+            "save_strategy": "steps",
+            "bf16": True,
+            "gradient_checkpointing": True,
+            "optim": cfg["optimizer"],
+            "lr_scheduler_type": cfg["scheduler"],
+            "seed": config.seed,
+            "report_to": "none",
+            "load_best_model_at_end": True,
+            "metric_for_best_model": "eval_loss",
+        },
+        eval_strategy="steps",
     )
 
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        tokenizer=tokenizer,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+    trainer = _build_sft_trainer(
+        model, training_args, tokenizer, split["train"], split["test"],
         max_seq_length=cfg["max_seq_length"],
-        dataset_text_field="text",
     )
 
     trainer.train()
@@ -332,37 +393,34 @@ def stage_2_behavior_lock(config: dict, tokenizer: AutoTokenizer):
 
     split = dataset.train_test_split(test_size=0.05, seed=config.seed)
 
-    training_args = TrainingArguments(
-        output_dir=os.path.join(config.output_dir, "stage2"),
-        per_device_train_batch_size=cfg["batch_size"],
-        gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
-        learning_rate=cfg["learning_rate"],
-        num_train_epochs=cfg["num_epochs"],
-        warmup_steps=50,
-        weight_decay=0.01,
-        logging_steps=10,
-        save_steps=500,
-        eval_steps=500,
-        **_eval_strategy_kwarg("steps"),
-        save_strategy="steps",
-        bf16=True,
-        gradient_checkpointing=True,
-        optim="adamw_torch",
-        lr_scheduler_type="cosine",
-        seed=config.seed,
-        report_to="none",
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_loss",
+    training_args = _build_training_args(
+        {
+            "output_dir": os.path.join(config.output_dir, "stage2"),
+            "per_device_train_batch_size": cfg["batch_size"],
+            "gradient_accumulation_steps": cfg["gradient_accumulation_steps"],
+            "learning_rate": cfg["learning_rate"],
+            "num_train_epochs": cfg["num_epochs"],
+            "warmup_steps": 50,
+            "weight_decay": 0.01,
+            "logging_steps": 10,
+            "save_steps": 500,
+            "eval_steps": 500,
+            "save_strategy": "steps",
+            "bf16": True,
+            "gradient_checkpointing": True,
+            "optim": "adamw_torch",
+            "lr_scheduler_type": "cosine",
+            "seed": config.seed,
+            "report_to": "none",
+            "load_best_model_at_end": True,
+            "metric_for_best_model": "eval_loss",
+        },
+        eval_strategy="steps",
     )
 
-    trainer = SFTTrainer(
-        model=model,
-        args=training_args,
-        tokenizer=tokenizer,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+    trainer = _build_sft_trainer(
+        model, training_args, tokenizer, split["train"], split["test"],
         max_seq_length=cfg["max_seq_length"],
-        dataset_text_field="text",
     )
 
     trainer.train()
@@ -401,37 +459,35 @@ def stage_3_dpo(config: dict, tokenizer: AutoTokenizer):
 
     split = dataset.train_test_split(test_size=0.05, seed=config.seed)
 
-    dpo_config = DPOConfig(
-        output_dir=os.path.join(config.output_dir, "stage3"),
-        per_device_train_batch_size=cfg["batch_size"],
-        gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
-        learning_rate=cfg["learning_rate"],
-        num_train_epochs=cfg["num_epochs"],
-        warmup_steps=50,
-        logging_steps=10,
-        save_steps=200,
-        eval_steps=200,
-        **_eval_strategy_kwarg("steps"),
-        save_strategy="steps",
-        bf16=True,
-        gradient_checkpointing=True,
-        optim="adamw_torch",
-        lr_scheduler_type="cosine",
-        seed=config.seed,
-        report_to="none",
-        max_prompt_length=512,
-        max_length=2048,
-        beta=cfg["beta"],  # DPO temperature parameter
-        loss_type="sigmoid",
+    dpo_config = _build_training_args(
+        {
+            "output_dir": os.path.join(config.output_dir, "stage3"),
+            "per_device_train_batch_size": cfg["batch_size"],
+            "gradient_accumulation_steps": cfg["gradient_accumulation_steps"],
+            "learning_rate": cfg["learning_rate"],
+            "num_train_epochs": cfg["num_epochs"],
+            "warmup_steps": 50,
+            "logging_steps": 10,
+            "save_steps": 200,
+            "eval_steps": 200,
+            "save_strategy": "steps",
+            "bf16": True,
+            "gradient_checkpointing": True,
+            "optim": "adamw_torch",
+            "lr_scheduler_type": "cosine",
+            "seed": config.seed,
+            "report_to": "none",
+            "max_prompt_length": 512,
+            "max_length": 2048,
+            "beta": cfg["beta"],
+            "loss_type": "sigmoid",
+        },
+        eval_strategy="steps",
+        config_cls=DPOConfig,
     )
 
-    trainer = DPOTrainer(
-        model=model,
-        ref_model=model_ref,
-        args=dpo_config,
-        tokenizer=tokenizer,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+    trainer = _build_dpo_trainer(
+        model, model_ref, dpo_config, tokenizer, split["train"], split["test"],
     )
 
     trainer.train()

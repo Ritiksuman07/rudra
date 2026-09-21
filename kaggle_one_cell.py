@@ -66,13 +66,21 @@ os.chdir(DST)
 
 # 2. Verify the critical fix is present (guards against stale code)
 train_src = open("src/train.py", encoding="utf-8").read()
-bad = train_src.count('config["cfg"]')
-if bad > 0:
+problems = []
+if train_src.count('config["cfg"]') > 0:
+    problems.append('config["cfg"] (should be config.cfg)')
+if "_build_training_args" not in train_src:
+    problems.append("missing _build_training_args (version-agnostic builder)")
+if "_build_sft_trainer" not in train_src:
+    problems.append("missing _build_sft_trainer")
+if train_src.count('evaluation_strategy="steps"') > 0:
+    problems.append('literal evaluation_strategy="steps" (should use the helper)')
+if problems:
     raise RuntimeError(
-        f"Stale code detected: found {bad} occurrences of config[\"cfg\"] in src/train.py. "
-        f"The downloaded code is outdated."
+        "Stale/outdated code detected in src/train.py: " + "; ".join(problems)
+        + ". The downloaded code is not the latest — check the GitHub source."
     )
-log(f"Verified: src/train.py uses config.cfg (0 stale refs). Files: {sorted(os.listdir(DST))[:8]}")
+log("Verified: src/train.py is the latest (version-agnostic builders present).")
 
 # 3. Install dependencies (pinned to a known-good, mutually compatible stack)
 log("Installing dependencies...")
@@ -88,6 +96,29 @@ subprocess.run(
 # ImportError instead of skipping. We don't use torchao, so remove it.
 log("Removing incompatible torchao...")
 subprocess.run(["pip", "uninstall", "-y", "torchao"], check=False)
+
+# 3b. Purge any previously-imported project modules and bytecode caches.
+# Re-running this cell in the same kernel keeps `src.*` in sys.modules, which
+# means edits on disk are ignored. Drop them so the fresh code is used.
+import importlib
+for _name in list(sys.modules):
+    if _name.split(".")[0] in ("src", "eval", "agent"):
+        del sys.modules[_name]
+importlib.invalidate_caches()
+for _root, _dirs, _files in os.walk(DST):
+    for _d in list(_dirs):
+        if _d == "__pycache__":
+            shutil.rmtree(os.path.join(_root, _d), ignore_errors=True)
+            _dirs.remove(_d)
+log("Purged cached src/eval/agent modules and __pycache__.")
+
+# 3c. Print installed versions so failures are diagnosable
+try:
+    import transformers, trl, peft, torch
+    log(f"Versions — torch={torch.__version__} transformers={transformers.__version__} "
+        f"trl={trl.__version__} peft={peft.__version__}")
+except Exception as _e:
+    log(f"Version check failed: {_e}")
 
 # 4. Generate data
 log("Generating datasets A-G + DPO pairs...")
