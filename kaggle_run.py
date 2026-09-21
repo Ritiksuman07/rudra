@@ -29,18 +29,43 @@ def log(msg):
     sys.stdout.flush()
 
 
-# ── 1. Get repo — clone or download ──
+# ── 1. Get repo — clone, download, or from uploaded dataset ──
 REPO_URL = "https://github.com/Ritiksuman07/rudra"
 WORK_DIR = "/kaggle/working/rudra"
 
-# Clean up any partial/pre-existing directory
-if os.path.exists(WORK_DIR):
-    log("Removing existing rudra directory...")
-    import shutil
-    shutil.rmtree(WORK_DIR, ignore_errors=True)
 
-def download_zip_fallback():
-    """Download repo as ZIP when git is unavailable."""
+def check_internet():
+    """Test if internet access works on Kaggle."""
+    try:
+        subprocess.run(
+            ["ping", "-c", "1", "github.com"],
+            capture_output=True, timeout=10,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        # ping not available, try DNS lookup
+        try:
+            import socket
+            socket.getaddrinfo("github.com", 443)
+            return True
+        except Exception:
+            return False
+
+
+def attempt_git_clone():
+    log("Cloning repo via git...")
+    result = subprocess.run(
+        ["git", "clone", REPO_URL, WORK_DIR],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        log(f"Git clone failed (code {result.returncode}): {result.stderr.strip()[:200]}")
+        return False
+    log("Clone successful.")
+    return True
+
+
+def download_zip():
     log("Downloading repo as ZIP...")
     import urllib.request, zipfile, glob
     zip_url = REPO_URL + "/archive/refs/heads/main.zip"
@@ -52,24 +77,52 @@ def download_zip_fallback():
     if extracted:
         os.rename(extracted[0], WORK_DIR)
     log("ZIP download complete.")
+    return True
 
-try:
-    log("Cloning repo via git...")
-    result = subprocess.run(
-        ["git", "clone", REPO_URL, WORK_DIR],
-        capture_output=True, text=True, timeout=120,
-    )
-    if result.returncode != 0:
-        log(f"Git clone failed (code {result.returncode}): {result.stderr.strip()}")
-        download_zip_fallback()
-    else:
-        log("Clone successful.")
-except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-    log(f"Git not available or timed out ({e}). Falling back to ZIP...")
-    download_zip_fallback()
+
+# Clean slate
+if os.path.exists(WORK_DIR):
+    log("Removing existing rudra directory...")
+    import shutil
+    shutil.rmtree(WORK_DIR, ignore_errors=True)
+
+# Check if repo is already uploaded as a Kaggle dataset
+POSSIBLE_PATHS = [
+    "/kaggle/input/rudra",
+    "/kaggle/input/rudra-main/rudra-main",
+]
+found_upload = False
+for p in POSSIBLE_PATHS:
+    if os.path.exists(p):
+        log(f"Found uploaded repo at {p}")
+        import shutil
+        shutil.copytree(p, WORK_DIR)
+        found_upload = True
+        break
+
+if not found_upload:
+    has_net = check_internet()
+    if not has_net:
+        log("=" * 60)
+        log("NO INTERNET ACCESS DETECTED")
+        log("=" * 60)
+        log("Turn on Internet in Kaggle Notebook settings:")
+        log("  Settings → Internet → ON")
+        log("")
+        log("Or upload the rudra folder as a Kaggle Dataset:")
+        log("  1. Zip the root folder of this project")
+        log("  2. Kaggle UI → Add Data → Upload → select zip")
+        log("  3. It will appear at /kaggle/input/rudra")
+        log("  4. Re-run this notebook")
+        log("=" * 60)
+        raise RuntimeError("No internet access. Enable Internet in Notebook settings or upload repo as dataset.")
+
+    # Try git clone, fall back to ZIP
+    if not attempt_git_clone():
+        download_zip()
 
 os.chdir(WORK_DIR)
-log(f"Working directory: {WORK_DIR}")
+log(f"Working directory: {os.getcwd()}")
 
 # ── 2. Install dependencies ──
 log("Installing dependencies...")
