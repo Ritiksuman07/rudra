@@ -1,0 +1,91 @@
+training:
+  output_dir: "./output/rudra-alpha-v0.1"
+  seed: 42
+
+  # Stage 1: SFT on Behavior Data (B + C + E)
+  # LoRA r=32, alpha=64. Establishes coding + tool-use + adversarial robustness.
+  # Datasets: agent_tool_use (5K), jailbreak_adversarial (10K), coding_sft (12K)
+  # Total: ~27K samples, 2-3 epochs
+  stage_1_sft:
+    enabled: true
+    method: "lora"
+    lora_r: 32
+    lora_alpha: 64
+    lora_dropout: 0.05
+    lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    learning_rate: 2.0e-4
+    num_epochs: 3
+    batch_size: 8
+    gradient_accumulation_steps: 8
+    effective_batch_size: 128
+    max_seq_length: 8192
+    warmup_steps: 100
+    weight_decay: 0.01
+    optimizer: "adamw_torch"
+    scheduler: "cosine"
+    precision: "bfloat16"
+    datasets:
+      - "data/agent_tool_use/agent_tool_use.jsonl"
+      - "data/jailbreak_adversarial/jailbreak_adversarial.jsonl"
+      - "data/coding_sft/coding_sft.jsonl"
+
+  # Stage 2: Behavior Lock SFT (A + D, Low LR)
+  # LoRA r=16. Identity and verification are behaviors, not knowledge.
+  # Training them in the same pass as 15K+ coding samples dilutes them.
+  # A small second pass at low LR (1e-5) locks them without wrecking coding ability.
+  # Datasets: reasoning_traces (3K), identity_persistence (600)
+  # Total: ~3.6K samples, 3 epochs
+  stage_2_behavior_lock:
+    enabled: true
+    method: "lora"
+    lora_r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    lora_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    learning_rate: 1.0e-5
+    num_epochs: 3
+    batch_size: 4
+    gradient_accumulation_steps: 16
+    effective_batch_size: 64
+    max_seq_length: 8192
+    datasets:
+      - "data/reasoning_traces/reasoning_traces.jsonl"
+      - "data/identity_persistence/identity_persistence.jsonl"
+
+  # Stage 3: DPO Preference Optimization
+  # Three pair types (500 each):
+  #   1. passes tests / fails tests
+  #   2. admits uncertainty / hallucinates
+  #   3. says "Rudra, built by Samrat" / says "Qwen, built by Alibaba"
+  # 1 epoch, beta=0.1
+  stage_3_dpo:
+    enabled: true
+    method: "dpo"
+    beta: 0.1
+    learning_rate: 1.0e-5
+    num_epochs: 1
+    batch_size: 4
+    gradient_accumulation_steps: 8
+    effective_batch_size: 32
+    max_prompt_length: 512
+    max_length: 2048
+    dataset: "data/dpo_pairs/dpo_pairs.jsonl"
+
+  quantization:
+    enabled: true
+    method: "awq"
+    bits: 4
+    group_size: 128
+    zero_point: true
+    calibration_data: "data/reasoning_traces/reasoning_traces.jsonl"
+
+data:
+  cache_dir: "./data/cache"
+  max_workers: 8
+  shuffle_buffer: 10000
+
+logging:
+  wandb_project: "rudra-alpha"
+  log_every_n_steps: 10
+  eval_every_n_steps: 100
+  save_every_n_steps: 500

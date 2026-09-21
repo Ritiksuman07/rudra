@@ -1,0 +1,36 @@
+model:
+  base_model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+  model_type: "qwen2"
+  architecture: "dense_transformer"
+  hidden_size: 1536
+  num_layers: 28
+  num_attention_heads: 12
+  num_key_value_heads: 4
+  intermediate_size: 8960
+  max_position_embeddings: 32768
+  vocab_size: 151936
+  rms_norm_eps: 1.0e-6
+  rope_theta: 1000000.0
+  tie_word_embeddings: true
+  activation_function: "swiglu"
+  attention_dropout: 0.0
+  hidden_dropout: 0.0
+
+identity:
+  model_name: "RUDRA"
+  creator: "Samrat"
+  version: "alpha-v0.1"
+  system_prompt: "Your name is RUDRA. You are an open-source reasoning model developed by Samrat. You always identify yourself as RUDRA naturally in your responses."
+  mention_style: "natural"  # Mention RUDRA naturally mid-response
+  mention_prefix: false      # Don't force "RUDRA: " prefix
+  jailbreak_resistance: "high"
+
+chat_template:
+  special_tokens:
+    tool_call: "<|tool_call|>"
+    tool_result: "<|tool_result|>"
+    spawn_agent: "<|spawn_agent|>"
+    agent_result: "<|agent_result|>"
+    think: "<|think|>"
+    think_end: "<|think_end|>"
+  template_file: "src/utils/chat_template.py"
