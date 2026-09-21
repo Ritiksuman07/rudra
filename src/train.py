@@ -188,7 +188,7 @@ def stage_1_sft(config: dict, tokenizer: AutoTokenizer):
     print("Stage 1: SFT (LoRA r=32) on B (agent) + C (jailbreak) + E (coding)")
     print("=" * 60)
 
-    cfg = config["cfg"]["training"]["stage_1_sft"]
+    cfg = config.cfg["training"]["stage_1_sft"]
     model = setup_model(config.model_name, tokenizer, quantize=False)
     model = setup_lora(model, r=cfg["lora_r"], alpha=cfg["lora_alpha"])
 
@@ -260,7 +260,7 @@ def stage_2_behavior_lock(config: dict, tokenizer: AutoTokenizer):
     print("Stage 2: Behavior Lock SFT (LoRA r=16) on A (reasoning) + D (identity)")
     print("=" * 60)
 
-    cfg = config["cfg"]["training"]["stage_2_behavior_lock"]
+    cfg = config.cfg["training"]["stage_2_behavior_lock"]
     model = setup_model(os.path.join(config.output_dir, "stage1/final"), tokenizer, quantize=False)
     model = setup_lora(model, r=cfg["lora_r"], alpha=cfg["lora_alpha"])
 
@@ -332,7 +332,7 @@ def stage_3_dpo(config: dict, tokenizer: AutoTokenizer):
     print("Stage 3: DPO on ~1,500 Preference Pairs")
     print("=" * 60)
 
-    cfg = config["cfg"]["training"]["stage_3_dpo"]
+    cfg = config.cfg["training"]["stage_3_dpo"]
     model = setup_model(os.path.join(config.output_dir, "stage2/final"), tokenizer, quantize=False)
 
     # For DPO we need a reference model too (frozen copy of the base)
