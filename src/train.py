@@ -47,6 +47,59 @@ class RudraTrainingConfig:
             self.cfg = yaml.safe_load(f)
 
 
+def _cuda_available() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
+def log_device():
+    """Print the training device, warning loudly if we're stuck on CPU."""
+    if _cuda_available():
+        import torch
+        name = torch.cuda.get_device_name(0)
+        print(f"  Device: CUDA ({name})")
+    else:
+        print("  " + "!" * 58)
+        print("  WARNING: No CUDA GPU detected — training on CPU is ~100x slower.")
+        print("  On Kaggle: Settings -> Accelerator -> GPU (T4 x2), then restart kernel.")
+        print("  " + "!" * 58)
+
+
+def _training_device_kwargs() -> dict:
+    """Device-aware precision / dataloader / checkpoint kwargs for TrainingArguments."""
+    import torch
+    kwargs = {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
+    if _cuda_available():
+        supports_bf16 = True
+        try:
+            supports_bf16 = torch.cuda.is_bf16_supported()
+        except Exception:
+            pass
+        kwargs["bf16"] = supports_bf16
+        kwargs["fp16"] = not supports_bf16
+        kwargs["dataloader_pin_memory"] = True
+    else:
+        kwargs["bf16"] = False
+        kwargs["fp16"] = False
+        kwargs["dataloader_pin_memory"] = False
+    return kwargs
+
+
+def _filter_supported_kwargs(cls, kwargs: dict) -> dict:
+    """Drop kwargs the target class doesn't accept (robust across versions)."""
+    try:
+        import inspect
+        params = inspect.signature(cls.__init__).parameters
+        if any(p.kind == p.VAR_KEYWORD for p in params.values()):
+            return kwargs
+        return {k: v for k, v in kwargs.items() if k in params}
+    except Exception:
+        return kwargs
+
+
 def setup_tokenizer(model_name: str) -> AutoTokenizer:
     """Load and configure tokenizer with RUDRA special tokens."""
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -91,6 +144,12 @@ def setup_model(model_name: str, tokenizer: AutoTokenizer, quantize: bool = Fals
     )
 
     model.resize_token_embeddings(len(tokenizer))
+
+    try:
+        first_param = next(model.parameters())
+        print(f"  Model device: {first_param.device}")
+    except Exception:
+        pass
 
     return model
 
@@ -156,6 +215,7 @@ def _build_training_args(base_kwargs: dict, eval_strategy: str = "steps", config
     """
     if config_cls is None:
         config_cls = TrainingArguments
+    base_kwargs = _filter_supported_kwargs(config_cls, base_kwargs)
     preferred = _eval_strategy_kwarg(eval_strategy)
     fallback = {"evaluation_strategy": eval_strategy} if "eval_strategy" in preferred else {"eval_strategy": eval_strategy}
 
@@ -395,7 +455,7 @@ def stage_1_sft(config: dict, tokenizer: AutoTokenizer):
             "save_steps": 500,
             "eval_steps": 500,
             "save_strategy": "steps",
-            "bf16": True,
+            **_training_device_kwargs(),
             "gradient_checkpointing": True,
             "optim": cfg["optimizer"],
             "lr_scheduler_type": cfg["scheduler"],
@@ -463,7 +523,7 @@ def stage_2_behavior_lock(config: dict, tokenizer: AutoTokenizer):
             "save_steps": 500,
             "eval_steps": 500,
             "save_strategy": "steps",
-            "bf16": True,
+            **_training_device_kwargs(),
             "gradient_checkpointing": True,
             "optim": "adamw_torch",
             "lr_scheduler_type": "cosine",
@@ -528,7 +588,7 @@ def stage_3_dpo(config: dict, tokenizer: AutoTokenizer):
             "save_steps": 200,
             "eval_steps": 200,
             "save_strategy": "steps",
-            "bf16": True,
+            **_training_device_kwargs(),
             "gradient_checkpointing": True,
             "optim": "adamw_torch",
             "lr_scheduler_type": "cosine",
@@ -559,6 +619,7 @@ def stage_3_dpo(config: dict, tokenizer: AutoTokenizer):
 def run_pipeline(config_path: str = "configs/train_config.yaml", start_stage: int = 1):
     """Run the full 3-stage training pipeline."""
     config = RudraTrainingConfig(config_path=config_path)
+    log_device()
     tokenizer = setup_tokenizer(config.model_name)
 
     stages = {

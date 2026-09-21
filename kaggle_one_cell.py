@@ -73,6 +73,10 @@ if "_build_training_args" not in train_src:
     problems.append("missing _build_training_args (version-agnostic builder)")
 if "_build_sft_trainer" not in train_src:
     problems.append("missing _build_sft_trainer")
+if "_enable_input_require_grads" not in train_src:
+    problems.append("missing _enable_input_require_grads (grad checkpointing fix)")
+if "_training_device_kwargs" not in train_src:
+    problems.append("missing _training_device_kwargs (device-aware precision)")
 if train_src.count('evaluation_strategy="steps"') > 0:
     problems.append('literal evaluation_strategy="steps" (should use the helper)')
 if problems:
@@ -129,6 +133,21 @@ try:
 except Exception as _e:
     log(f"Version check failed: {_e}")
 
+# 3d. GPU check — training on CPU is ~100x slower.
+try:
+    import torch
+    if torch.cuda.is_available():
+        log(f"GPU detected: {torch.cuda.get_device_name(0)} "
+            f"({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB)")
+    else:
+        log("!" * 60)
+        log("NO GPU DETECTED — training will run on CPU and be extremely slow.")
+        log("Fix: notebook Settings -> Accelerator -> GPU (T4 x2 or P100), then")
+        log("     restart the kernel and run this cell again.")
+        log("!" * 60)
+except Exception as _e:
+    log(f"GPU check failed: {_e}")
+
 # 4. Generate data
 log("Generating datasets A-G + DPO pairs...")
 from src.generate_data import generate_all_data, generate_dpo_pairs
@@ -138,11 +157,12 @@ log(f"Data ready: {dpo_path}")
 
 # 5. Train — 3 stages
 from src.train import (
-    RudraTrainingConfig, setup_tokenizer,
+    RudraTrainingConfig, setup_tokenizer, log_device,
     stage_1_sft, stage_2_behavior_lock, stage_3_dpo,
 )
 
 cfg = RudraTrainingConfig(config_path="configs/train_config.yaml")
+log_device()
 tok = setup_tokenizer(cfg.model_name)
 
 log("=== Stage 1: SFT (LoRA r=32) on B+C+E ===")
