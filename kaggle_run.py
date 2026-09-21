@@ -33,30 +33,43 @@ def log(msg):
 REPO_URL = "https://github.com/Ritiksuman07/rudra"
 WORK_DIR = "/kaggle/working/rudra"
 
-if not os.path.exists(WORK_DIR):
-    # Try git clone first, fall back to ZIP download
-    try:
-        log("Cloning repo via git...")
-        subprocess.run(["git", "clone", REPO_URL, WORK_DIR], check=True, capture_output=True)
+# Clean up any partial/pre-existing directory
+if os.path.exists(WORK_DIR):
+    log("Removing existing rudra directory...")
+    import shutil
+    shutil.rmtree(WORK_DIR, ignore_errors=True)
+
+def download_zip_fallback():
+    """Download repo as ZIP when git is unavailable."""
+    log("Downloading repo as ZIP...")
+    import urllib.request, zipfile, glob
+    zip_url = REPO_URL + "/archive/refs/heads/main.zip"
+    zip_path = "/kaggle/working/rudra.zip"
+    urllib.request.urlretrieve(zip_url, zip_path)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall("/kaggle/working/")
+    extracted = glob.glob("/kaggle/working/rudra-*")
+    if extracted:
+        os.rename(extracted[0], WORK_DIR)
+    log("ZIP download complete.")
+
+try:
+    log("Cloning repo via git...")
+    result = subprocess.run(
+        ["git", "clone", REPO_URL, WORK_DIR],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        log(f"Git clone failed (code {result.returncode}): {result.stderr.strip()}")
+        download_zip_fallback()
+    else:
         log("Clone successful.")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        log("Git clone failed. Downloading ZIP instead...")
-        import urllib.request, zipfile
-        zip_url = REPO_URL + "/archive/refs/heads/main.zip"
-        zip_path = "/kaggle/working/rudra.zip"
-        urllib.request.urlretrieve(zip_url, zip_path)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall("/kaggle/working/")
-        # The zip contains a top-level folder like "rudra-main"
-        import glob
-        extracted = glob.glob("/kaggle/working/rudra-*")
-        if extracted:
-            os.rename(extracted[0], WORK_DIR)
-        log("Download complete.")
-    os.chdir(WORK_DIR)
-else:
-    os.chdir(WORK_DIR)
-    log("Repo directory already exists.")
+except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+    log(f"Git not available or timed out ({e}). Falling back to ZIP...")
+    download_zip_fallback()
+
+os.chdir(WORK_DIR)
+log(f"Working directory: {WORK_DIR}")
 
 # ── 2. Install dependencies ──
 log("Installing dependencies...")
