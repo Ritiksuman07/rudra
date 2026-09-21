@@ -95,8 +95,45 @@ def setup_model(model_name: str, tokenizer: AutoTokenizer, quantize: bool = Fals
     return model
 
 
+def _disable_torchao_dispatch():
+    """Make PEFT tolerate an incompatible torchao install.
+
+    Recent PEFT versions call peft.import_utils.is_torchao_available() from the
+    LoRA dispatcher. When torchao is present but too old, that function raises
+    ImportError instead of returning False, which crashes get_peft_model() even
+    though we never use torchao. Patch it to return False on any error.
+    """
+    def _make_safe(orig):
+        def _safe():
+            try:
+                return orig()
+            except Exception:
+                return False
+        return _safe
+
+    try:
+        import peft.import_utils as _iu
+        if not getattr(_iu.is_torchao_available, "_rudra_safe", False):
+            _safe = _make_safe(_iu.is_torchao_available)
+            _safe._rudra_safe = True
+            _iu.is_torchao_available = _safe
+    except Exception:
+        pass
+
+    try:
+        import peft.tuners.lora.torchao as _t
+        if not getattr(_t.is_torchao_available, "_rudra_safe", False):
+            _safe = _make_safe(_t.is_torchao_available)
+            _safe._rudra_safe = True
+            _t.is_torchao_available = _safe
+    except Exception:
+        pass
+
+
 def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules: Optional[list] = None):
     """Apply LoRA to a model."""
+    _disable_torchao_dispatch()
+
     if target_modules is None:
         target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 

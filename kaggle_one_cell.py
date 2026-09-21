@@ -84,6 +84,11 @@ subprocess.run(
     check=True,
 )
 
+# Kaggle ships an old torchao (0.10.0) that makes PEFT's LoRA dispatcher raise
+# ImportError instead of skipping. We don't use torchao, so remove it.
+log("Removing incompatible torchao...")
+subprocess.run(["pip", "uninstall", "-y", "torchao"], check=False)
+
 # 4. Generate data
 log("Generating datasets A-G + DPO pairs...")
 from src.generate_data import generate_all_data, generate_dpo_pairs

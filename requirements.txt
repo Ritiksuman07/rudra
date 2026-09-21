@@ -5,6 +5,9 @@ transformers>=4.45.0
 datasets>=3.0.0
 accelerate>=0.34.0
 peft>=0.13.0
+# NOTE: if torchao is installed, PEFT's LoRA dispatcher raises ImportError when
+# the version is below 0.16.0. We don't use torchao — run `pip uninstall -y torchao`
+# or rely on the _disable_torchao_dispatch() shim in src/train.py.
 trl>=0.11.0
 bitsandbytes>=0.44.0
 sentencepiece
