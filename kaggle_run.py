@@ -29,15 +29,34 @@ def log(msg):
     sys.stdout.flush()
 
 
-# ── 1. Clone repo ──
-REPO_URL = "https://github.com/samrat/rudra"  # TODO: replace with actual repo URL
-if not os.path.exists("/kaggle/working/rudra"):
-    log("Cloning repo...")
-    subprocess.run(["git", "clone", REPO_URL, "/kaggle/working/rudra"], check=True)
-    os.chdir("/kaggle/working/rudra")
+# ── 1. Get repo — clone or download ──
+REPO_URL = "https://github.com/Ritiksuman07/rudra"
+WORK_DIR = "/kaggle/working/rudra"
+
+if not os.path.exists(WORK_DIR):
+    # Try git clone first, fall back to ZIP download
+    try:
+        log("Cloning repo via git...")
+        subprocess.run(["git", "clone", REPO_URL, WORK_DIR], check=True, capture_output=True)
+        log("Clone successful.")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        log("Git clone failed. Downloading ZIP instead...")
+        import urllib.request, zipfile
+        zip_url = REPO_URL + "/archive/refs/heads/main.zip"
+        zip_path = "/kaggle/working/rudra.zip"
+        urllib.request.urlretrieve(zip_url, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall("/kaggle/working/")
+        # The zip contains a top-level folder like "rudra-main"
+        import glob
+        extracted = glob.glob("/kaggle/working/rudra-*")
+        if extracted:
+            os.rename(extracted[0], WORK_DIR)
+        log("Download complete.")
+    os.chdir(WORK_DIR)
 else:
-    os.chdir("/kaggle/working/rudra")
-    log("Repo already cloned.")
+    os.chdir(WORK_DIR)
+    log("Repo directory already exists.")
 
 # ── 2. Install dependencies ──
 log("Installing dependencies...")
