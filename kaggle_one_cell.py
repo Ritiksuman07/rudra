@@ -74,13 +74,13 @@ if bad > 0:
     )
 log(f"Verified: src/train.py uses config.cfg (0 stale refs). Files: {sorted(os.listdir(DST))[:8]}")
 
-# 3. Install dependencies
+# 3. Install dependencies (pinned to a known-good, mutually compatible stack)
 log("Installing dependencies...")
 subprocess.run(
     ["pip", "install", "-q",
-     "torch", "transformers", "datasets", "accelerate",
-     "peft", "trl", "bitsandbytes", "sentencepiece",
-     "pyyaml", "evalplus"],
+     "transformers==4.44.2", "trl==0.11.4", "peft==0.13.2",
+     "accelerate==0.34.2", "bitsandbytes==0.44.1", "datasets==3.0.1",
+     "sentencepiece", "pyyaml", "evalplus"],
     check=True,
 )
 

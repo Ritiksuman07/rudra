@@ -130,6 +130,24 @@ def _disable_torchao_dispatch():
         pass
 
 
+def _eval_strategy_kwarg(value: str = "steps") -> dict:
+    """Return the correct eval-strategy kwarg for the installed transformers.
+
+    transformers renamed `evaluation_strategy` to `eval_strategy` in 4.46.
+    Detect which one the installed version accepts so the pipeline runs on
+    both old and new stacks.
+    """
+    try:
+        import inspect
+        import transformers
+        params = inspect.signature(transformers.TrainingArguments.__init__).parameters
+        if "eval_strategy" in params:
+            return {"eval_strategy": value}
+    except Exception:
+        pass
+    return {"evaluation_strategy": value}
+
+
 def setup_lora(model, r: int, alpha: int, dropout: float = 0.05, target_modules: Optional[list] = None):
     """Apply LoRA to a model."""
     _disable_torchao_dispatch()
@@ -254,7 +272,7 @@ def stage_1_sft(config: dict, tokenizer: AutoTokenizer):
         logging_steps=10,
         save_steps=500,
         eval_steps=500,
-        evaluation_strategy="steps",
+        **_eval_strategy_kwarg("steps"),
         save_strategy="steps",
         bf16=True,
         gradient_checkpointing=True,
@@ -325,7 +343,7 @@ def stage_2_behavior_lock(config: dict, tokenizer: AutoTokenizer):
         logging_steps=10,
         save_steps=500,
         eval_steps=500,
-        evaluation_strategy="steps",
+        **_eval_strategy_kwarg("steps"),
         save_strategy="steps",
         bf16=True,
         gradient_checkpointing=True,
@@ -393,7 +411,7 @@ def stage_3_dpo(config: dict, tokenizer: AutoTokenizer):
         logging_steps=10,
         save_steps=200,
         eval_steps=200,
-        evaluation_strategy="steps",
+        **_eval_strategy_kwarg("steps"),
         save_strategy="steps",
         bf16=True,
         gradient_checkpointing=True,
